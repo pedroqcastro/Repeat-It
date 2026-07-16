@@ -1,1 +1,11 @@
-revisoes.db
+# Ignorar o banco de dados (o app recria ele)
+repeat_it.db
+reset_database.py
+upload_cassandra_old_questions.py
+dataprev2026_edital_populate.py
+
+# Ignorar ambientes virtuais
+venv/
+.venv/
+__pycache__/
+
