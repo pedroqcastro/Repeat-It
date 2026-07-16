@@ -5,6 +5,7 @@ import pandas as pd
 import hashlib
 import math
 import io
+import plotly.express as px
 
 # Configuração da Página
 st.set_page_config(page_title="Repeat It", layout="centered")
@@ -25,7 +26,6 @@ if "toast_msg" not in st.session_state:
 # BANCO DE DADOS (SQLite)
 # -----------------------------------------------------------------------------
 def init_db():
-    # O 'with' garante o fechamento automático da conexão e o 'timeout' evita o travamento
     with sqlite3.connect("repeat_it.db", timeout=10) as conn:
         cursor = conn.cursor()
         
@@ -88,8 +88,6 @@ def query_db(query, params=(), fetchall=True):
     with sqlite3.connect("repeat_it.db", timeout=10) as conn:
         cursor = conn.cursor()
         cursor.execute(query, params)
-        
-        # Só tenta dar 'fetch' (puxar dados) se for um comando SELECT
         if query.strip().upper().startswith("SELECT"):
             res = cursor.fetchall() if fetchall else cursor.fetchone()
             return res
@@ -99,13 +97,16 @@ def query_db(query, params=(), fetchall=True):
 
 init_db()
 
+def criptografar_senha(senha):
+    return hashlib.sha256(senha.encode()).hexdigest()
+
 # -----------------------------------------------------------------------------
 # TELA DE AUTENTICAÇÃO
 # -----------------------------------------------------------------------------
 if st.session_state.usuario is None:
     st.title("Repeat It 🧠")
     st.caption("Estudo ativo e revisão espaçada.")
-    st.write("") # Espaçador
+    st.write("") 
     
     tab_login, tab_cadastrar = st.tabs(["🔒 Entrar", "📝 Criar Conta"])
     
@@ -227,36 +228,31 @@ ESCALA_DOMINIO = {
 }
 
 def gerar_prompt(nivel, acertou):
-    if nivel == 4: # Hesitação Leve
+    if nivel == 4:
         if acertou:
             return "O gabarito desta questão é a alternativa [CORRETA], e eu acertei. Porém, o texto da alternativa [LETRA DA SUA DÚVIDA] me fez hesitar por um momento. Explique em, no máximo, duas linhas qual é a diferença técnica pontual entre elas para eu não hesitar novamente."
         else:
             return "Errei a questão. Marquei a alternativa [SUA RESPOSTA], mas o gabarito é [CORRETA]. Eu hesitei e acabei caindo no erro. Explique em, no máximo, duas linhas qual é o detalhe técnico que invalida a minha resposta e valida o gabarito."
-    
-    elif nivel == 3: # Dúvida entre Duas
+    elif nivel == 3:
         if acertou:
             return "Acertei a questão (gabarito [CORRETA]), mas fiquei em dúvida entre ela e a [LETRA DA SUA DÚVIDA]. Crie uma regra prática direta ou um mnemônico curto para eu diferenciar o conceito das duas com segurança no futuro."
         else:
             return "Errei a questão. Fiquei dividido entre a [SUA RESPOSTA] e o gabarito [CORRETA], e acabei marcando a errada. Crie uma regra prática direta ou mnemônico para eu parar de confundir o conceito da minha resposta com a correta."
-
-    elif nivel == 2: # Exceção / Pegadinha
+    elif nivel == 2:
         if acertou:
             return "Acertei a questão (gabarito [CORRETA]), mas notei que a banca usou uma pegadinha forte ou cobrou uma exceção. Aponte em bullet points curtos qual foi a armadilha semântica ou exceção específica dessa questão, apenas para validar e fixar meu raciocínio."
         else:
             return "Errei essa questão caindo em uma pegadinha ou exceção. Marquei [SUA RESPOSTA] e o gabarito é [CORRETA]. Eu já conheço a regra geral do assunto. Aponte em bullet points curtos exatamente onde está a 'pegadinha' semântica ou qual é a regra de exceção cobrada. Não explique a teoria básica."
-
-    elif nivel == 1: # Conhecimento Raso / Chute
+    elif nivel == 1:
         if acertou:
             return "Acertei essa questão (gabarito [CORRETA]) puramente no chute ou por intuição rasa. Aplicando o Princípio de Pareto, resuma em 3 tópicos curtos estritamente a regra que eu preciso saber para acertar esse padrão de cobrança sem depender da sorte na próxima vez. Ignore teorias aprofundadas."
         else:
             return "Errei essa questão marcando [SUA RESPOSTA], pois não tenho domínio firme do termo cobrado (chutei). O gabarito é [CORRETA]. Aplicando o Princípio de Pareto, resuma em 3 tópicos curtos e diretos a regra exata que me faria acertar esse formato de questão. Ignore a teoria adjacente."
-
-    elif nivel == 0: # Assunto Inédito / Branco
+    elif nivel == 0:
         if acertou:
             return "Acertei essa questão (gabarito [CORRETA]) num chute completamente cego. Não faço ideia do que se trata o assunto principal. Use uma analogia simples para explicar a ideia central do tema e justifique, de forma bem resumida, apenas o porquê do gabarito estar certo."
         else:
             return "Errei essa questão e não tenho nenhum conhecimento prévio sobre o assunto cobrado. O gabarito é [CORRETA]. Use uma analogia simples do dia a dia para me explicar a ideia central do tema e justifique apenas por que a alternativa correta é essa. Não gaste tempo analisando as incorretas."
-    
     return ""
 
 @st.dialog("Confirmar Alteração de Data")
@@ -285,7 +281,6 @@ if st.session_state.toast_msg:
 col_titulo, col_logout = st.columns([4, 1])
 with col_titulo:
     st.title("Repeat It 🧠")
-    # Subtítulo unido com a conta ativa para uma UI mais limpa e moderna
     st.caption(f"Estudo ativo e revisão espaçada. &nbsp; • &nbsp; Conta ativa: **{st.session_state.usuario}**")
 with col_logout:
     st.write("") 
@@ -310,13 +305,12 @@ todos_dados_usuario = query_db("""
 # -----------------------------------------------------------------------------
 # COMPONENTIZAÇÃO DE ABAS
 # -----------------------------------------------------------------------------
-tab_fila_sm2, tab_fila_ineditas, tab_cadastro, tab_materias, tab_banco = st.tabs([
-    "Fila Revisão", "Fila Inéditas", "Inserir Única", "Catálogo", "Banco de Dados"
+tab_fila_sm2, tab_fila_ineditas, tab_cadastro, tab_materias, tab_dash, tab_banco, tab_sobre = st.tabs([
+    "Fila Revisão", "Fila Inéditas", "Inserir Única", "Catálogo", "Dashboards", "Banco de Dados", "Sobre"
 ])
 
 # --- TAB 1: FILA SM-2 (REVISÃO) ---
 with tab_fila_sm2:
-    
     st.subheader("📅 Calendário de Revisão")
     st.write("")
     col_prev, *cols_dias, col_next = st.columns([0.6, 1, 1, 1, 1, 1, 0.6])
@@ -582,7 +576,6 @@ with tab_materias:
 
     st.divider()
     
-    # Nova Sessão: Visualização do Catálogo
     st.subheader("📚 Seu Catálogo Atual")
     
     materias_cadastradas = query_db("SELECT id, nome FROM materias WHERE usuario = ? ORDER BY nome", (st.session_state.usuario,))
@@ -599,8 +592,89 @@ with tab_materias:
                 else:
                     for top_id, top_nome in topicos_cadastrados:
                         st.markdown(f"- {top_nome}")
-                        
-# --- TAB 5: BANCO DE DADOS ---
+
+# --- TAB 5: DASHBOARDS ---
+with tab_dash:
+    if not todos_dados_usuario:
+        st.info("💡 Não há dados suficientes. Realize algumas questões e revisões para gerar os dashboards.")
+    else:
+        # Preparando os dados em Pandas
+        df_dash = pd.DataFrame(todos_dados_usuario, columns=[
+            "id_questao", "total_tentativas", "sequencia_retencao", "fator_facilidade", 
+            "intervalo", "ultimo_dominio", "proxima_revisao", "materia_nome", "topico_nome"
+        ])
+        
+        # 1. Previsão de Carga (Forecast de Revisão)
+        st.subheader("Previsão de Carga (Próximos 14 dias)")
+        df_dash['proxima_revisao_dt'] = pd.to_datetime(df_dash['proxima_revisao'], format='%d/%m/%Y')
+        hoje_dt = pd.to_datetime(hoje_str, format='%d/%m/%Y')
+        df_forecast = df_dash[df_dash['proxima_revisao_dt'] >= hoje_dt].groupby('proxima_revisao_dt').size().reset_index(name='Quantidade')
+        df_forecast = df_forecast.sort_values('proxima_revisao_dt').head(14)
+        df_forecast['Data'] = df_forecast['proxima_revisao_dt'].dt.strftime('%d/%m')
+        
+        if df_forecast.empty:
+            st.write("Nenhuma revisão agendada para os próximos dias.")
+        else:
+            fig1 = px.bar(df_forecast, x='Data', y='Quantidade', text_auto=True, color_discrete_sequence=['#4C78A8'])
+            fig1.update_layout(xaxis_title="", yaxis_title="Pendências", margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig1, use_container_width=True)
+            
+        st.divider()
+        
+        col_graf1, col_graf2 = st.columns(2)
+        
+        # 2. O Gráfico de Pareto (Radar de Fraquezas)
+        with col_graf1:
+            st.subheader("Radar de Fraquezas (Bottom 5)")
+            df_pareto = df_dash.groupby('materia_nome')['ultimo_dominio'].mean().reset_index()
+            # Pega as 5 piores médias (ordem crescente)
+            df_pareto = df_pareto.sort_values('ultimo_dominio').head(5)
+            # Para o Plotly exibir de cima pra baixo a menor nota, precisamos ordenar de forma reversa
+            df_pareto = df_pareto.sort_values('ultimo_dominio', ascending=False)
+            
+            fig2 = px.bar(df_pareto, x='ultimo_dominio', y='materia_nome', orientation='h', text_auto='.2f', color_discrete_sequence=['#E45756'])
+            fig2.update_layout(xaxis_title="Média de Domínio (0 a 5)", yaxis_title="", margin=dict(l=0, r=0, t=30, b=0))
+            fig2.update_xaxes(range=[0, 5])
+            st.plotly_chart(fig2, use_container_width=True)
+
+        # 3. Distribuição de Domínio (Saúde Geral)
+        with col_graf2:
+            st.subheader("Saúde Geral (Por Domínio)")
+            df_donut = df_dash.groupby('ultimo_dominio').size().reset_index(name='Quantidade')
+            
+            # Mapeando os nomes da escala para o gráfico
+            mapeamento_nomes = {k: v.split(" ", 1)[1] for k, v in ESCALA_DOMINIO.items()}
+            df_donut['Nome_Dominio'] = df_donut['ultimo_dominio'].map(lambda x: f"{x} - {mapeamento_nomes[x]}")
+            
+            fig3 = px.pie(df_donut, values='Quantidade', names='Nome_Dominio', hole=0.5)
+            fig3.update_layout(margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=-0.1))
+            st.plotly_chart(fig3, use_container_width=True)
+
+        st.divider()
+
+        # 4. Maturidade da Memória (Funil de Retenção)
+        st.subheader("Maturidade da Memória")
+        def categorizar_intervalo(dias):
+            if dias < 7: return "Curto Prazo (<7 dias)"
+            elif dias <= 21: return "Médio Prazo (7-21 dias)"
+            else: return "Longo Prazo (>21 dias)"
+            
+        df_dash['Categoria_Retencao'] = df_dash['intervalo'].apply(categorizar_intervalo)
+        df_funnel = df_dash['Categoria_Retencao'].value_counts().reset_index()
+        df_funnel.columns = ['Categoria', 'Quantidade']
+        
+        ordem = ["Curto Prazo (<7 dias)", "Médio Prazo (7-21 dias)", "Longo Prazo (>21 dias)"]
+        df_funnel['Categoria'] = pd.Categorical(df_funnel['Categoria'], categories=ordem, ordered=True)
+        df_funnel = df_funnel.sort_values('Categoria')
+        
+        fig4 = px.bar(df_funnel, x='Categoria', y='Quantidade', text_auto=True, color='Categoria',
+                      color_discrete_map={"Curto Prazo (<7 dias)": "#F58518", 
+                                          "Médio Prazo (7-21 dias)": "#F4CA16", 
+                                          "Longo Prazo (>21 dias)": "#54A24B"})
+        fig4.update_layout(xaxis_title="", yaxis_title="Qtd. Questões", margin=dict(l=0, r=0, t=30, b=0), showlegend=False)
+        st.plotly_chart(fig4, use_container_width=True)
+
+# --- TAB 6: BANCO DE DADOS ---
 with tab_banco:
     if todos_dados_usuario:
         st.subheader("Suas Questões Salvas (Análise SM-2)")
@@ -612,3 +686,50 @@ with tab_banco:
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         st.info("Sem questões registradas.")
+
+# --- TAB 7: SOBRE ---
+with tab_sobre:
+    st.header("Sobre o Repeat It")
+    st.markdown("O **Repeat It** combina duas técnicas poderosas para maximizar a retenção de longo prazo e minimizar o desperdício de tempo: o **Estudo Reverso** guiado pelo Princípio de Pareto e o algoritmo de repetição espaçada **SuperMemo 2 (SM-2)**.")
+    
+    st.divider()
+    
+    st.subheader("1. O Princípio do Estudo Reverso")
+    st.markdown("""
+    A abordagem padrão ensina a estudar toda a teoria antes de tentar resolver questões. O Estudo Reverso inverte isso: você começa pela questão e vai para a teoria apenas para preencher lacunas específicas de conhecimento.
+    
+    Isso é suportado pelo **Princípio de Pareto (A regra 80/20)**, que sugere que cerca de 20% do material teórico é responsável por resolver 80% das questões das provas. Nosso aplicativo obriga você a identificar exatamente qual é a lacuna (*"Foi uma pegadinha?", "Eu hesitei?", "Não sei o conceito base?"*) e gera prompts dinâmicos para a IA entregar **apenas a regra necessária**, ignorando toda a burocracia do entorno.
+    """)
+    
+    st.divider()
+    
+    st.subheader("2. O Algoritmo SM-2 (Adaptado)")
+    st.markdown("""
+    O **SuperMemo 2** é uma fórmula matemática desenhada para prever o momento exato em que seu cérebro está prestes a esquecer uma informação, forçando a revisão na véspera do esquecimento.
+    
+    No nosso aplicativo, substituímos os botões subjetivos de "Difícil" ou "Fácil" por uma **Escala Diagnóstica de Nível de Domínio (0 a 5)**.
+    """)
+    
+    # Renderização da fórmula oficial baseada em Nível de Domínio
+    st.markdown("A matemática do agendamento avalia a qualidade da sua resposta $q$ (que equivale ao seu Nível de Domínio de $0$ a $5$). Se $q \\ge 3$, o resgate da memória foi bem sucedido e a sequência continua:")
+    
+    st.latex(r"I(1) = 1")
+    st.latex(r"I(2) = 6")
+    st.latex(r"I(n) = \lceil I(n-1) \times EF \rceil")
+    
+    st.markdown("Se $q < 3$, a qualidade foi inaceitável. O cérebro falhou em resgatar a informação, a sequência é zerada e a revisão reagendada para o dia seguinte ($I = 1$).")
+    
+    st.markdown("A cada interação, a dificuldade da questão (Fator de Facilidade - $EF$) é reajustada usando a seguinte fórmula de regressão:")
+    
+    st.latex(r"EF = EF + (0.1 - (5 - q) \times (0.08 + (5 - q) \times 0.02))")
+    
+    st.markdown("*(O $EF$ nunca é reduzido para menos de $1.3$ para evitar revisões exaustivas e travamento da fila).*")
+    
+    st.divider()
+    
+    st.subheader("A Tática do 'Acerto Ponderado'")
+    st.markdown("""
+    Ao alimentar questões na **Fila de Inéditas**, o aplicativo usa o "Acerto Ponderado". 
+    Isso significa que acertar uma questão porque você teve uma Dúvida Leve gera um comportamento matemático diferente de acertá-la por um Chute Cego.
+    Se o seu nível de domínio informado for 0, 1 ou 2, o sistema **sobrepõe o acerto** e diz ao banco de dados que a qualidade foi $0$, forçando a questão a aparecer para revisão já no dia seguinte, blindando o seu longo prazo contra a falsa segurança de um acerto na sorte.
+    """)
