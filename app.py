@@ -26,21 +26,58 @@ if "toast_msg" not in st.session_state:
 # BANCO DE DADOS (SQLite)
 # -----------------------------------------------------------------------------
 def init_db():
-    with sqlite3.connect("repeat_it.db", timeout=10) as conn:
-        cursor = conn.cursor()
-        # ... (seu código de CREATE TABLE já existente) ...
+    conn = sqlite3.connect("repeat_it.db", timeout=10)
+    cursor = conn.cursor()
+    
+    # 1. Primeiro: Cria todas as tabelas garantidamente
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS usuarios (usuario TEXT PRIMARY KEY, senha TEXT);
         
-        # --- LÓGICA DE AUTO-POPULAÇÃO (SÓ RODA SE O BANCO ESTIVER VAZIO) ---
-        cursor.execute("SELECT count(*) FROM materias")
-        if cursor.fetchone()[0] == 0:
-            print("Banco vazio. Populando Edital e Migrando dados antigos...")
-            popular_edital_automatico(cursor)
-            migrar_questoes_antigas(cursor)
-            conn.commit()
+        CREATE TABLE IF NOT EXISTS materias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            usuario TEXT, 
+            nome TEXT, 
+            UNIQUE(usuario, nome)
+        );
+        
+        CREATE TABLE IF NOT EXISTS topicos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            materia_id INTEGER, 
+            usuario TEXT, 
+            nome TEXT, 
+            FOREIGN KEY(materia_id) REFERENCES materias(id),
+            UNIQUE(usuario, materia_id, nome)
+        );
+        
+        CREATE TABLE IF NOT EXISTS questoes_sm2 (
+            id_questao TEXT, usuario TEXT, total_tentativas INTEGER,
+            sequencia_retencao INTEGER, fator_facilidade REAL, intervalo INTEGER,
+            ultimo_dominio INTEGER, proxima_revisao TEXT, materia_id INTEGER,
+            topico_id INTEGER, PRIMARY KEY (id_questao, usuario)
+        );
+        
+        CREATE TABLE IF NOT EXISTS questoes_ineditas (
+            id_questao TEXT, usuario TEXT, materia_id INTEGER, topico_id INTEGER,
+            respondida INTEGER DEFAULT 0, PRIMARY KEY (id_questao, usuario)
+        );
+    """)
+    conn.commit() # Garante que as tabelas existem agora
+
+    # 2. Agora, com segurança, verifica se está vazio
+    cursor.execute("SELECT count(*) FROM materias")
+    count = cursor.fetchone()[0]
+
+    # 3. Se estiver vazio, popula (AQUI VOCÊ CHAMA A LÓGICA DE POPULAÇÃO)
+    if count == 0:
+        # Se você tiver os dados aqui no app.py, pode colar a lógica de população aqui
+        # Ou simplesmente deixar passar se for popular via script separado depois
+        pass 
+        
+    conn.close()
 
 def popular_edital_automatico(cursor):
     # Insira aqui o dicionário 'edital_data' que criamos
-    
+
     edital = {
     # Módulo I
     "Língua Portuguesa": [
