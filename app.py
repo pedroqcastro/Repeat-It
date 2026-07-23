@@ -1,5 +1,5 @@
 import streamlit as st
-import sqlite3
+import psycopg2
 import datetime
 import pandas as pd
 import hashlib
@@ -23,77 +23,86 @@ if "toast_msg" not in st.session_state:
     st.session_state.toast_msg = None
 
 # -----------------------------------------------------------------------------
-# BANCO DE DADOS (SQLite)
+# BANCO DE DADOS (PostgreSQL via Neon)
 # -----------------------------------------------------------------------------
 def init_db():
-    with sqlite3.connect("repeat_it.db", timeout=10) as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS usuarios (
-                usuario TEXT PRIMARY KEY,
-                senha TEXT
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS questoes_sm2 (
-                id_questao TEXT,
-                usuario TEXT,
-                total_tentativas INTEGER,
-                sequencia_retencao INTEGER,
-                fator_facilidade REAL,
-                intervalo INTEGER,
-                ultimo_dominio INTEGER,
-                proxima_revisao TEXT,
-                materia_id INTEGER,
-                topico_id INTEGER,
-                PRIMARY KEY (id_questao, usuario)
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS materias (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                usuario TEXT,
-                nome TEXT,
-                UNIQUE(usuario, nome)
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS topicos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                materia_id INTEGER,
-                usuario TEXT,
-                nome TEXT,
-                FOREIGN KEY(materia_id) REFERENCES materias(id),
-                UNIQUE(usuario, materia_id, nome)
-            )
-        """)
+    conn = psycopg2.connect(st.secrets["DATABASE_URL"])
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            usuario TEXT PRIMARY KEY,
+            senha TEXT
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS questoes_sm2 (
+            id_questao TEXT,
+            usuario TEXT,
+            total_tentativas INTEGER,
+            sequencia_retencao INTEGER,
+            fator_facilidade REAL,
+            intervalo INTEGER,
+            ultimo_dominio INTEGER,
+            proxima_revisao TEXT,
+            materia_id INTEGER,
+            topico_id INTEGER,
+            PRIMARY KEY (id_questao, usuario)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS materias (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT,
+            nome TEXT,
+            UNIQUE(usuario, nome)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS topicos (
+            id SERIAL PRIMARY KEY,
+            materia_id INTEGER,
+            usuario TEXT,
+            nome TEXT,
+            FOREIGN KEY(materia_id) REFERENCES materias(id),
+            UNIQUE(usuario, materia_id, nome)
+        )
+    """)
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS questoes_ineditas (
-                id_questao TEXT,
-                usuario TEXT,
-                materia_id INTEGER,
-                topico_id INTEGER,
-                respondida INTEGER DEFAULT 0,
-                PRIMARY KEY (id_questao, usuario)
-            )
-        """)
-        conn.commit()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS questoes_ineditas (
+            id_questao TEXT,
+            usuario TEXT,
+            materia_id INTEGER,
+            topico_id INTEGER,
+            respondida INTEGER DEFAULT 0,
+            PRIMARY KEY (id_questao, usuario)
+        )
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 def query_db(query, params=(), fetchall=True):
-    with sqlite3.connect("repeat_it.db", timeout=10) as conn:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        if query.strip().upper().startswith("SELECT"):
-            res = cursor.fetchall() if fetchall else cursor.fetchone()
-            return res
-        else:
-            conn.commit()
-            return None
+    conn = psycopg2.connect(st.secrets["DATABASE_URL"])
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    
+    # Se for um SELECT ou tiver RETURNING, extrai os resultados
+    if query.strip().upper().startswith("SELECT") or "RETURNING" in query.strip().upper():
+        res = cursor.fetchall() if fetchall else cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return res
+    else:
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return None
 
 init_db()
 
@@ -119,7 +128,7 @@ if st.session_state.usuario is None:
             
             if botao_login:
                 if user_login and senha_login:
-                    busca_user = query_db("SELECT senha FROM usuarios WHERE usuario = ?", (user_login,), fetchall=False)
+                    busca_user = query_db("SELECT senha FROM usuarios WHERE usuario = %s", (user_login,), fetchall=False)
                     if not busca_user:
                         st.error("❌ Usuário não existe.")
                     elif busca_user[0] != criptografar_senha(senha_login):
@@ -140,7 +149,7 @@ if st.session_state.usuario is None:
             
             if botao_cadastro:
                 if user_cad and senha_cad and senha_cad_conf:
-                    usuario_existe = query_db("SELECT 1 FROM usuarios WHERE usuario = ?", (user_cad,), fetchall=False)
+                    usuario_existe = query_db("SELECT 1 FROM usuarios WHERE usuario = %s", (user_cad,), fetchall=False)
                     if usuario_existe:
                         st.error(f"❌ O usuário `{user_cad}` já está em uso.")
                     elif senha_cad != senha_cad_conf:
@@ -149,7 +158,7 @@ if st.session_state.usuario is None:
                         st.error("A senha deve ter pelo menos 6 caracteres.")
                     else:
                         senha_hash = criptografar_senha(senha_cad)
-                        query_db("INSERT INTO usuarios (usuario, senha) VALUES (?, ?)", (user_cad, senha_hash))
+                        query_db("INSERT INTO usuarios (usuario, senha) VALUES (%s, %s)", (user_cad, senha_hash))
                         st.success("🎉 Conta criada com sucesso! Mude para a aba 'Entrar' para fazer o login.")
                 else:
                     st.warning("Preencha todos os campos para efetuar o cadastro.")
@@ -180,7 +189,7 @@ def registrar_resposta_sm2(id_questao, nivel_dominio, questao_existente=None, ma
         total_tentativas, sequencia_retencao, fator_facilidade, intervalo = 0, 0, 2.5, 0
     else:
         total_tentativas, sequencia_retencao, fator_facilidade, intervalo = questao_existente
-        res_chaves = query_db("SELECT materia_id, topico_id FROM questoes_sm2 WHERE id_questao=? AND usuario=?", 
+        res_chaves = query_db("SELECT materia_id, topico_id FROM questoes_sm2 WHERE id_questao=%s AND usuario=%s", 
                               (id_questao, st.session_state.usuario), fetchall=False)
         if res_chaves:
             materia_id = res_chaves[0] if materia_id is None else materia_id
@@ -191,9 +200,20 @@ def registrar_resposta_sm2(id_questao, nivel_dominio, questao_existente=None, ma
     proxima_data = hoje + datetime.timedelta(days=novo_intervalo)
     
     query_db(
-        """INSERT OR REPLACE INTO questoes_sm2 
+        """INSERT INTO questoes_sm2 
            (id_questao, usuario, total_tentativas, sequencia_retencao, fator_facilidade, intervalo, ultimo_dominio, proxima_revisao, materia_id, topico_id) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (id_questao, usuario) 
+           DO UPDATE SET 
+               total_tentativas = EXCLUDED.total_tentativas,
+               sequencia_retencao = EXCLUDED.sequencia_retencao,
+               fator_facilidade = EXCLUDED.fator_facilidade,
+               intervalo = EXCLUDED.intervalo,
+               ultimo_dominio = EXCLUDED.ultimo_dominio,
+               proxima_revisao = EXCLUDED.proxima_revisao,
+               materia_id = EXCLUDED.materia_id,
+               topico_id = EXCLUDED.topico_id
+           """,
         (id_questao, st.session_state.usuario, novo_total, nova_sequencia, novo_fator, novo_intervalo, nivel_dominio, proxima_data.strftime("%d/%m/%Y"), materia_id, topico_id)
     )
 
@@ -201,17 +221,11 @@ def garantir_materia_topico(nome_materia, nome_topico):
     nome_materia = str(nome_materia).strip()
     nome_topico = str(nome_topico).strip()
     
-    try:
-        query_db("INSERT INTO materias (usuario, nome) VALUES (?, ?)", (st.session_state.usuario, nome_materia))
-    except sqlite3.IntegrityError:
-        pass
-    mat_id = query_db("SELECT id FROM materias WHERE usuario = ? AND nome = ?", (st.session_state.usuario, nome_materia), fetchall=False)[0]
+    query_db("INSERT INTO materias (usuario, nome) VALUES (%s, %s) ON CONFLICT (usuario, nome) DO NOTHING", (st.session_state.usuario, nome_materia), fetchall=False)
+    mat_id = query_db("SELECT id FROM materias WHERE usuario = %s AND nome = %s", (st.session_state.usuario, nome_materia), fetchall=False)[0]
     
-    try:
-        query_db("INSERT INTO topicos (materia_id, usuario, nome) VALUES (?, ?, ?)", (mat_id, st.session_state.usuario, nome_topico))
-    except sqlite3.IntegrityError:
-        pass
-    top_id = query_db("SELECT id FROM topicos WHERE materia_id = ? AND usuario = ? AND nome = ?", (mat_id, st.session_state.usuario, nome_topico), fetchall=False)[0]
+    query_db("INSERT INTO topicos (materia_id, usuario, nome) VALUES (%s, %s, %s) ON CONFLICT (usuario, materia_id, nome) DO NOTHING", (mat_id, st.session_state.usuario, nome_topico), fetchall=False)
+    top_id = query_db("SELECT id FROM topicos WHERE materia_id = %s AND usuario = %s AND nome = %s", (mat_id, st.session_state.usuario, nome_topico), fetchall=False)[0]
     
     return mat_id, top_id
 
@@ -250,7 +264,7 @@ def gerar_prompt(nivel, acertou):
             return "Errei essa questão marcando [SUA RESPOSTA], pois não tenho domínio firme do termo cobrado (chutei). O gabarito é [CORRETA]. Aplicando o Princípio de Pareto, resuma em 3 tópicos curtos e diretos a regra exata que me faria acertar esse formato de questão. Ignore a teoria adjacente."
     elif nivel == 0:
         if acertou:
-            return "Acertei essa questão (gabarito [CORRETA]) num chute completamente cego. Não faço ideia do que se trata o assunto principal. Use uma analogia simples para explicar a ideia central do tema e justifique, de forma bem resumida, apenas o porquê do gabarito estar certo."
+            return "Acertei essa questão (gabarito [CORRETA]) num chute completamente cego. Não faço ideia do que se trata o assunto principal. Use uma analogia simples para explicar a ideia central do tema e justify, de forma bem resumida, apenas o porquê do gabarito estar certo."
         else:
             return "Errei essa questão e não tenho nenhum conhecimento prévio sobre o assunto cobrado. O gabarito é [CORRETA]. Use uma analogia simples do dia a dia para me explicar a ideia central do tema e justifique apenas por que a alternativa correta é essa. Não gaste tempo analisando as incorretas."
     return ""
@@ -264,7 +278,7 @@ def confirmar_alteracao_dialog(id_q, data_antiga, data_nova):
     col_sim, col_nao = st.columns(2)
     if col_sim.button("Sim, tenho certeza", use_container_width=True, type="primary"):
         query_db(
-            "UPDATE questoes_sm2 SET proxima_revisao = ? WHERE id_questao = ? AND usuario = ?", 
+            "UPDATE questoes_sm2 SET proxima_revisao = %s WHERE id_questao = %s AND usuario = %s", 
             (data_nova.strftime("%d/%m/%Y"), id_q, st.session_state.usuario)
         )
         st.rerun()
@@ -294,12 +308,12 @@ hoje_str = hoje_base.strftime("%d/%m/%Y")
 todos_dados_usuario = query_db("""
     SELECT q.id_questao, q.total_tentativas, q.sequencia_retencao, q.fator_facilidade, 
            q.intervalo, q.ultimo_dominio, q.proxima_revisao,
-           IFNULL(m.nome, 'Não Atribuída') as materia_nome, 
-           IFNULL(t.nome, 'Não Atribuído') as topico_nome
+           COALESCE(m.nome, 'Não Atribuída') as materia_nome, 
+           COALESCE(t.nome, 'Não Atribuído') as topico_nome
     FROM questoes_sm2 q
     LEFT JOIN materias m ON q.materia_id = m.id
     LEFT JOIN topicos t ON q.topico_id = t.id
-    WHERE q.usuario = ?
+    WHERE q.usuario = %s
 """, (st.session_state.usuario,))
 
 # -----------------------------------------------------------------------------
@@ -400,7 +414,7 @@ with tab_fila_ineditas:
         FROM questoes_ineditas q
         JOIN materias m ON q.materia_id = m.id
         JOIN topicos t ON q.topico_id = t.id
-        WHERE q.usuario = ? AND q.respondida = 0
+        WHERE q.usuario = %s AND q.respondida = 0
     """, (st.session_state.usuario,))
     
     with st.expander("📥 Importar Planilha de Questões"):
@@ -423,12 +437,12 @@ with tab_fila_ineditas:
                         top = str(row['Topico']).strip()
                         
                         mat_id, top_id = garantir_materia_topico(mat, top)
-                        try:
-                            query_db("INSERT INTO questoes_ineditas (id_questao, usuario, materia_id, topico_id) VALUES (?, ?, ?, ?)", 
-                                     (id_q, st.session_state.usuario, mat_id, top_id))
+                        
+                        res = query_db("INSERT INTO questoes_ineditas (id_questao, usuario, materia_id, topico_id) VALUES (%s, %s, %s, %s) ON CONFLICT (id_questao, usuario) DO NOTHING RETURNING id_questao", 
+                                       (id_q, st.session_state.usuario, mat_id, top_id), fetchall=False)
+                        if res:
                             novas += 1
-                        except sqlite3.IntegrityError:
-                            pass
+                            
                     st.session_state.toast_msg = (f"{novas} questões processadas e adicionadas à fila de inéditas.", "✅")
                     st.rerun()
                 except Exception as e:
@@ -469,14 +483,14 @@ with tab_fila_ineditas:
                 if st.button("📥 Registrar na Fila de Revisão SM-2", type="primary", use_container_width=True):
                     dificuldade_sm2 = nivel if acertou_bool else 0
                     registrar_resposta_sm2(id_q, dificuldade_sm2, materia_id=mat_id, topico_id=top_id)
-                    query_db("UPDATE questoes_ineditas SET respondida = 1 WHERE id_questao = ? AND usuario = ?", (id_q, st.session_state.usuario))
+                    query_db("UPDATE questoes_ineditas SET respondida = 1 WHERE id_questao = %s AND usuario = %s", (id_q, st.session_state.usuario))
                     st.rerun()
 
 # --- TAB 3: INSERIR QUESTÃO ÚNICA (SM-2 Direto) ---
 with tab_cadastro:
     st.subheader("Inserção Direta (Fora da Fila)")
     
-    lista_materias = query_db("SELECT id, nome FROM materias WHERE usuario = ?", (st.session_state.usuario,))
+    lista_materias = query_db("SELECT id, nome FROM materias WHERE usuario = %s", (st.session_state.usuario,))
     
     if not lista_materias:
         st.warning("⚠️ Cadastre matérias no Catálogo antes de inserir.")
@@ -488,7 +502,7 @@ with tab_cadastro:
             mat_id = mat_opcoes[mat_selecionada]
             
         with col_t:
-            lista_topicos = query_db("SELECT id, nome FROM topicos WHERE materia_id = ? AND usuario = ?", (mat_id, st.session_state.usuario))
+            lista_topicos = query_db("SELECT id, nome FROM topicos WHERE materia_id = %s AND usuario = %s", (mat_id, st.session_state.usuario))
             if not lista_topicos:
                 st.warning("⚠️ Sem tópicos.")
                 top_id = None
@@ -523,7 +537,7 @@ with tab_materias:
     with st.container(border=True):
         st.write("**Adicionar Matéria ou Tópico**")
         
-        lista_materias_form = query_db("SELECT id, nome FROM materias WHERE usuario = ? ORDER BY nome", (st.session_state.usuario,))
+        lista_materias_form = query_db("SELECT id, nome FROM materias WHERE usuario = %s ORDER BY nome", (st.session_state.usuario,))
         opcoes_mat = ["+ Criar Nova Matéria..."] + [m[1] for m in lista_materias_form]
         
         materia_selecionada = st.selectbox("Selecione a Matéria ou crie uma nova:", opcoes_mat, key="sel_mat_unica")
@@ -548,22 +562,21 @@ with tab_materias:
                 mat_nova_salva = False
                 
                 if materia_selecionada == "+ Criar Nova Matéria...":
-                    try:
-                        query_db("INSERT INTO materias (usuario, nome) VALUES (?, ?)", (st.session_state.usuario, nome_mat_final))
+                    res = query_db("INSERT INTO materias (usuario, nome) VALUES (%s, %s) ON CONFLICT (usuario, nome) DO NOTHING RETURNING id", 
+                                   (st.session_state.usuario, nome_mat_final), fetchall=False)
+                    if res:
                         mat_nova_salva = True
-                    except sqlite3.IntegrityError:
-                        pass 
                         
-                res = query_db("SELECT id FROM materias WHERE usuario = ? AND nome = ?", (st.session_state.usuario, nome_mat_final), fetchall=False)
+                res = query_db("SELECT id FROM materias WHERE usuario = %s AND nome = %s", (st.session_state.usuario, nome_mat_final), fetchall=False)
                 
                 if res:
                     mat_id = res[0]
                     if nome_top_final:
-                        try:
-                            query_db("INSERT INTO topicos (materia_id, usuario, nome) VALUES (?, ?, ?)", 
-                                     (mat_id, st.session_state.usuario, nome_top_final))
+                        res_top = query_db("INSERT INTO topicos (materia_id, usuario, nome) VALUES (%s, %s, %s) ON CONFLICT (usuario, materia_id, nome) DO NOTHING RETURNING id", 
+                                           (mat_id, st.session_state.usuario, nome_top_final), fetchall=False)
+                        if res_top:
                             st.session_state.toast_msg = (f"Tópico '{nome_top_final}' salvo na matéria '{nome_mat_final}'!", "✅")
-                        except sqlite3.IntegrityError:
+                        else:
                             st.session_state.toast_msg = (f"O tópico '{nome_top_final}' já existe em '{nome_mat_final}'.", "❌")
                     else:
                         if mat_nova_salva:
@@ -578,14 +591,14 @@ with tab_materias:
     
     st.subheader("📚 Seu Catálogo Atual")
     
-    materias_cadastradas = query_db("SELECT id, nome FROM materias WHERE usuario = ? ORDER BY nome", (st.session_state.usuario,))
+    materias_cadastradas = query_db("SELECT id, nome FROM materias WHERE usuario = %s ORDER BY nome", (st.session_state.usuario,))
     
     if not materias_cadastradas:
         st.info("Você ainda não tem matérias cadastradas no seu catálogo.")
     else:
         for mat_id, mat_nome in materias_cadastradas:
             with st.expander(f"📖 **{mat_nome}**"):
-                topicos_cadastrados = query_db("SELECT id, nome FROM topicos WHERE materia_id = ? AND usuario = ? ORDER BY nome", (mat_id, st.session_state.usuario))
+                topicos_cadastrados = query_db("SELECT id, nome FROM topicos WHERE materia_id = %s AND usuario = %s ORDER BY nome", (mat_id, st.session_state.usuario))
                 
                 if not topicos_cadastrados:
                     st.write("*Nenhum tópico cadastrado nesta matéria.*")
@@ -598,13 +611,11 @@ with tab_dash:
     if not todos_dados_usuario:
         st.info("💡 Não há dados suficientes. Realize algumas questões e revisões para gerar os dashboards.")
     else:
-        # Preparando os dados em Pandas
         df_dash = pd.DataFrame(todos_dados_usuario, columns=[
             "id_questao", "total_tentativas", "sequencia_retencao", "fator_facilidade", 
             "intervalo", "ultimo_dominio", "proxima_revisao", "materia_nome", "topico_nome"
         ])
         
-        # 1. Previsão de Carga (Forecast de Revisão)
         st.subheader("Previsão de Carga (Próximos 14 dias)")
         df_dash['proxima_revisao_dt'] = pd.to_datetime(df_dash['proxima_revisao'], format='%d/%m/%Y')
         hoje_dt = pd.to_datetime(hoje_str, format='%d/%m/%Y')
@@ -623,13 +634,10 @@ with tab_dash:
         
         col_graf1, col_graf2 = st.columns(2)
         
-        # 2. O Gráfico de Pareto (Radar de Fraquezas)
         with col_graf1:
             st.subheader("Radar de Fraquezas (Bottom 5)")
             df_pareto = df_dash.groupby('materia_nome')['ultimo_dominio'].mean().reset_index()
-            # Pega as 5 piores médias (ordem crescente)
             df_pareto = df_pareto.sort_values('ultimo_dominio').head(5)
-            # Para o Plotly exibir de cima pra baixo a menor nota, precisamos ordenar de forma reversa
             df_pareto = df_pareto.sort_values('ultimo_dominio', ascending=False)
             
             fig2 = px.bar(df_pareto, x='ultimo_dominio', y='materia_nome', orientation='h', text_auto='.2f', color_discrete_sequence=['#E45756'])
@@ -637,12 +645,9 @@ with tab_dash:
             fig2.update_xaxes(range=[0, 5])
             st.plotly_chart(fig2, use_container_width=True)
 
-        # 3. Distribuição de Domínio (Saúde Geral)
         with col_graf2:
             st.subheader("Saúde Geral (Por Domínio)")
             df_donut = df_dash.groupby('ultimo_dominio').size().reset_index(name='Quantidade')
-            
-            # Mapeando os nomes da escala para o gráfico
             mapeamento_nomes = {k: v.split(" ", 1)[1] for k, v in ESCALA_DOMINIO.items()}
             df_donut['Nome_Dominio'] = df_donut['ultimo_dominio'].map(lambda x: f"{x} - {mapeamento_nomes[x]}")
             
@@ -652,7 +657,6 @@ with tab_dash:
 
         st.divider()
 
-        # 4. Maturidade da Memória (Funil de Retenção)
         st.subheader("Maturidade da Memória")
         def categorizar_intervalo(dias):
             if dias < 7: return "Curto Prazo (<7 dias)"
@@ -710,8 +714,7 @@ with tab_sobre:
     No nosso aplicativo, substituímos os botões subjetivos de "Difícil" ou "Fácil" por uma **Escala Diagnóstica de Nível de Domínio (0 a 5)**.
     """)
     
-    # Renderização da fórmula oficial baseada em Nível de Domínio
-    st.markdown("A matemática do agendamento avalia a qualidade da sua resposta $q$ (que equivale ao seu Nível de Domínio de $0$ a $5$). Se $q \\ge 3$, o resgate da memória foi bem sucedido e a sequência continua:")
+    st.markdown("A matemática do agendamento avalia a qualidade da sua resposta $q$ (que equivale ao seu Nível de Domínio de $0$ a $5$). Se $q \ge 3$, o resgate da memória foi bem sucedido e a sequência continua:")
     
     st.latex(r"I(1) = 1")
     st.latex(r"I(2) = 6")

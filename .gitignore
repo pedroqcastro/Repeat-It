@@ -2,6 +2,9 @@
 reset_database.py
 upload_cassandra_old_questions.py
 dataprev2026_edital_populate.py
+.streamlit/
+2026-07-16T12-10_export.csv
+repeat_it.db
 
 # Ignorar ambientes virtuais
 venv/
